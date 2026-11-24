@@ -1,0 +1,14 @@
+{
+  "name": "fork-ops",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "semver": "^7.7.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
