@@ -165,7 +165,14 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
-          git merge --no-commit --no-ff "refs/forkops/${TAG}" || true
+          set +e
+          git merge --no-commit --no-ff "refs/forkops/${TAG}"
+          merge_code=$?
+          set -e
+          if [ "$merge_code" -ne 0 ] && [ -z "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "::error::The merge failed without a conflict."
+            exit "$merge_code"
+          fi
           if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
             echo "The merge conflicted. Resolving the version files."
             set +e
@@ -184,6 +191,16 @@ jobs:
           else
             node ../ops/scripts/write-version.mjs "$VERSION"
           fi
+
+      - name: "Write the version when the merge is already an ancestor"
+        id: write_version
+        if: steps.plan.outputs.action != 'skip' && steps.resolve_upstream_tag.outputs.merged == 'true'
+        working-directory: fork
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          node ../ops/scripts/write-version.mjs "$VERSION"
 
       - name: "Refresh the lock file"
         id: lockfile
@@ -217,8 +234,16 @@ jobs:
           set -euo pipefail
           config=".github/fork-release.json"
           version_path=$(jq -r '.versionFields[] | select(has("field")) | .path' "$config" | head -n 1)
+          version_field=$(jq -r '.versionFields[] | select(has("field")) | .field' "$config" | head -n 1)
           if [ -n "$version_path" ]; then
-            actual=$(jq -r .version "$version_path")
+            case "$version_path" in
+              *.json)
+                actual=$(jq -r ".${version_field}" "$version_path")
+                ;;
+              *)
+                actual=$(sed -n 's/^[[:space:]]*version:[[:space:]]*//p' "$version_path" | head -n 1)
+                ;;
+            esac
             if [ "$actual" != "$VERSION" ]; then
               echo "::error::${version_path} holds ${actual}, but the plan says ${VERSION}."
               exit 1
