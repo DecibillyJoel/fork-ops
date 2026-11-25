@@ -120,7 +120,7 @@ jobs:
           if [ -n "$version_path" ] && [ -f "$version_path" ]; then
             current_version=$(jq -r ".${version_field}" "$version_path")
           fi
-          releases=$(gh release list --limit 200 --json tagName --jq '.[].tagName' | jq -s .)
+          releases=$(gh release list --limit 200 --json tagName | jq -c '[.[].tagName]')
           tags=$(git tag -l | jq -R . | jq -s .)
           jq -n \
             --arg upstream_tag "$UPSTREAM_TAG" \
