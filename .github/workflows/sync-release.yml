@@ -1,0 +1,330 @@
+# The reusable sync and release workflow. A fork calls it with:
+#   uses: DecibillyJoel/fork-ops/.github/workflows/sync-release.yml@v1
+
+name: "Sync and release"
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Upstream release tag to merge (blank = newest release)"
+        type: string
+        default: ""
+      force:
+        description: "Publish even when a release for the base already exists"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: "upstream-sync"
+  cancel-in-progress: false
+
+jobs:
+  sync-release:
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 30
+    env:
+      INPUT_TAG: ${{ inputs.tag }}
+      INPUT_FORCE: ${{ inputs.force }}
+    steps:
+      - name: "Check out the fork"
+        id: checkout_fork
+        uses: "actions/checkout@v4"
+        with:
+          path: "fork"
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: "Check out the fork-ops scripts"
+        id: checkout_ops
+        uses: "actions/checkout@v4"
+        with:
+          repository: "DecibillyJoel/fork-ops"
+          ref: "v1"
+          path: "ops"
+
+      - name: "Read the fork config"
+        id: config
+        working-directory: fork
+        run: |
+          set -euo pipefail
+          config=".github/fork-release.json"
+          if [ ! -f "$config" ]; then
+            echo "::error::No .github/fork-release.json"
+            exit 1
+          fi
+          {
+            echo "node_version=$(jq -r .nodeVersion "$config")"
+            echo "upstream=$(jq -r .upstream "$config")"
+            echo "tag_format=$(jq -r .tagFormat "$config")"
+            echo "lockfile=$(jq -r .lockfile "$config")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Set up Node"
+        id: setup_node
+        uses: "actions/setup-node@v4"
+        with:
+          node-version: ${{ steps.config.outputs.node_version }}
+
+      - name: "Install the fork-ops scripts"
+        id: install_ops
+        working-directory: ops
+        run: npm ci
+
+      - name: "Resolve the upstream tag"
+        id: resolve_upstream_tag
+        working-directory: fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ steps.config.outputs.upstream }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag=$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name)
+          fi
+          echo "Upstream tag: ${tag}"
+          git fetch --no-tags "https://github.com/${UPSTREAM}" "+refs/tags/${tag}:refs/forkops/${tag}"
+          if git merge-base --is-ancestor "refs/forkops/${tag}" HEAD; then
+            merged="true"
+          else
+            merged="false"
+          fi
+          base=$(node ../ops/scripts/normalize-tag.mjs --base "$tag")
+          {
+            echo "tag=${tag}"
+            echo "merged=${merged}"
+            echo "base=${base}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Plan the release"
+        id: plan
+        working-directory: fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ steps.config.outputs.upstream }}
+          UPSTREAM_TAG: ${{ steps.resolve_upstream_tag.outputs.tag }}
+          MERGED: ${{ steps.resolve_upstream_tag.outputs.merged }}
+          TAG_FORMAT: ${{ steps.config.outputs.tag_format }}
+        run: |
+          set -euo pipefail
+          config=".github/fork-release.json"
+          current_version=""
+          version_path=$(jq -r '.versionFields[] | select(has("field")) | .path' "$config" | head -n 1)
+          version_field=$(jq -r '.versionFields[] | select(has("field")) | .field' "$config" | head -n 1)
+          if [ -n "$version_path" ] && [ -f "$version_path" ]; then
+            current_version=$(jq -r ".${version_field}" "$version_path")
+          fi
+          releases=$(gh release list --limit 200 --json tagName --jq '.[].tagName' -R . | jq -s .)
+          tags=$(git tag -l | jq -R . | jq -s .)
+          jq -n \
+            --arg upstream_tag "$UPSTREAM_TAG" \
+            --argjson merged "$MERGED" \
+            --argjson releases "$releases" \
+            --argjson tags "$tags" \
+            --arg current_version "$current_version" \
+            --argjson force "$INPUT_FORCE" \
+            --arg tag_format "$TAG_FORMAT" \
+            '{
+              upstreamTag: $upstream_tag,
+              merged: $merged,
+              releases: $releases,
+              tags: $tags,
+              currentVersion: $current_version,
+              force: $force,
+              tagFormat: $tag_format
+            }' > "$RUNNER_TEMP/plan-input.json"
+          node ../ops/scripts/release-plan.mjs < "$RUNNER_TEMP/plan-input.json" > "$RUNNER_TEMP/plan.json"
+          {
+            echo "action=$(jq -r .action "$RUNNER_TEMP/plan.json")"
+            echo "version=$(jq -r .version "$RUNNER_TEMP/plan.json")"
+            echo "tag=$(jq -r .tag "$RUNNER_TEMP/plan.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Stop when the release already exists"
+        id: skip
+        if: steps.plan.outputs.action == 'skip'
+        env:
+          TAG_TAG: ${{ steps.plan.outputs.tag }}
+          BASE: ${{ steps.resolve_upstream_tag.outputs.base }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Already released ${TAG_TAG} for base ${BASE}"
+
+      - name: "Merge the upstream release"
+        id: merge
+        if: steps.plan.outputs.action != 'skip' && steps.resolve_upstream_tag.outputs.merged != 'true'
+        working-directory: fork
+        env:
+          TAG: ${{ steps.resolve_upstream_tag.outputs.tag }}
+          BASE: ${{ steps.resolve_upstream_tag.outputs.base }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          git merge --no-commit --no-ff "refs/forkops/${TAG}" || true
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "The merge conflicted. Resolving the version files."
+            set +e
+            node ../ops/scripts/resolve-version-conflicts.mjs "$BASE"
+            code=$?
+            set -e
+            if [ "$code" -eq 3 ]; then
+              git diff --name-only --diff-filter=U | sort > "$RUNNER_TEMP/conflicts.txt"
+              echo "::error::A conflicted path is outside the version files."
+              exit 1
+            fi
+            if [ "$code" -ne 0 ]; then
+              echo "::error::The version file resolver failed with exit code ${code}."
+              exit "$code"
+            fi
+          else
+            node ../ops/scripts/write-version.mjs "$VERSION"
+          fi
+
+      - name: "Refresh the lock file"
+        id: lockfile
+        if: steps.plan.outputs.action != 'skip' && steps.config.outputs.lockfile != 'none'
+        working-directory: fork
+        env:
+          LOCKFILE: ${{ steps.config.outputs.lockfile }}
+        run: |
+          set -euo pipefail
+          case "$LOCKFILE" in
+            package-lock.json)
+              npm install --package-lock-only --ignore-scripts
+              ;;
+            pnpm-lock.yaml)
+              corepack enable
+              pnpm install --lockfile-only
+              ;;
+            *)
+              echo "::error::Unknown lockfile ${LOCKFILE}"
+              exit 1
+              ;;
+          esac
+
+      - name: "Verify the merged tree"
+        id: verify
+        if: steps.plan.outputs.action != 'skip'
+        working-directory: fork
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          config=".github/fork-release.json"
+          version_path=$(jq -r '.versionFields[] | select(has("field")) | .path' "$config" | head -n 1)
+          if [ -n "$version_path" ]; then
+            actual=$(jq -r .version "$version_path")
+            if [ "$actual" != "$VERSION" ]; then
+              echo "::error::${version_path} holds ${actual}, but the plan says ${VERSION}."
+              exit 1
+            fi
+          fi
+          for key in install test build pack; do
+            command=$(jq -r --arg key "$key" '.[$key] // ""' "$config")
+            if [ -z "$command" ]; then
+              continue
+            fi
+            echo "::group::${key}: ${command}"
+            bash -euo pipefail -c "$command"
+            echo "::endgroup::"
+          done
+
+      - name: "Commit the sync"
+        id: commit
+        if: steps.plan.outputs.action != 'skip'
+        working-directory: fork
+        env:
+          TAG: ${{ steps.resolve_upstream_tag.outputs.tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          git add -u
+          if git diff --cached --quiet; then
+            echo "::notice::No change to commit."
+          else
+            git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "Sync ${TAG} and release ${VERSION}"
+          fi
+
+      - name: "Tag the release and push"
+        id: tag
+        if: steps.plan.outputs.action != 'skip'
+        working-directory: fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -f "$TAG_TAG"
+          branch="${{ github.event.repository.default_branch }}"
+          if [ -z "$branch" ]; then
+            branch=$(gh api "repos/${REPO}" --jq .default_branch)
+          fi
+          git push origin "HEAD:${branch}"
+          git push origin "refs/tags/${TAG_TAG}"
+
+      - name: "Publish the release"
+        id: publish
+        if: steps.plan.outputs.action != 'skip'
+        working-directory: fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ steps.config.outputs.upstream }}
+          TAG: ${{ steps.resolve_upstream_tag.outputs.tag }}
+          TAG_TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          config=".github/fork-release.json"
+          {
+            echo "Synced upstream ${TAG}."
+            echo "Dataset commit: $(git rev-parse HEAD)."
+            echo ""
+          } > "$RUNNER_TEMP/notes.md"
+          gh api "repos/${UPSTREAM}/releases/tags/${TAG}" --jq .body >> "$RUNNER_TEMP/notes.md"
+          assets=()
+          while IFS= read -r asset; do
+            assets+=("$asset")
+          done < <(jq -r '.assets[]' "$config")
+          pack=$(jq -r '.pack // ""' "$config")
+          if [ -n "$pack" ]; then
+            assets+=("*.tgz")
+          fi
+          gh release create "$TAG_TAG" --title "$TAG_TAG" --notes-file "$RUNNER_TEMP/notes.md" "${assets[@]}"
+
+      - name: "Report the conflict"
+        id: report_problem
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve_upstream_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/conflicts.txt" ]; then
+            echo "No conflict report to make."
+            exit 0
+          fi
+          title="Upstream sync problem: ${TAG}"
+          paths=$(cat "$RUNNER_TEMP/conflicts.txt")
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+            --jq '.[] | "\(.number)\t\(.title)"' \
+            | awk -F '\t' -v title="$title" '$2 == title { print $1; exit }')
+          write_body() {
+            echo "@me"
+            echo ""
+            echo "Conflicting paths:"
+            echo '```'
+            echo "$paths"
+            echo '```'
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          if [ -n "$existing" ]; then
+            write_body | gh issue comment "$existing" --body-file -
+          else
+            write_body | gh issue create --title "$title" --body-file -
+          fi
