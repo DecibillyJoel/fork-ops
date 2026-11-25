@@ -228,7 +228,8 @@ No fork in scope has a `manifest.json` except the two Obsidian plugins. `superpo
 
 - Version files never carry a tag prefix.
 - The base is always the upstream version with its patch raised by one. A run never uses the upstream version as its own base.
-- The new version compares greater than the highest existing tag of that fork. Equal or lower is an error, not a warning. The one-time repairs of `obsidian-openagent` and `deadbeef-lyricbar` are not syncs and bypass this rule.
+- The new version compares greater than the highest existing tag of that fork. Equal or lower is an error, not a warning. The one-time repairs of `obsidian-openagent`, `deadbeef-lyricbar` and `obsidian-onedrive` are not syncs and bypass this rule.
+- A plain release that sits at the planned base blocks every fork release for that base, because a prerelease never outranks its plain release. The repair is a rename into the fork numbering, not a base bump. `obsidian-onedrive` needed it: plain `2.1.2` became `2.1.2-fork.1` and the old `2.1.2-fork.1` became `2.1.2-fork.2`, each on its own commit.
 - The tag inside a release names a commit on the default branch.
 - The `manifest.json` inside the release assets holds the same version as the tag, without the prefix.
 - Only a merge conflict or an allowlist rejection opens an issue.
