@@ -221,7 +221,7 @@ No fork in scope has a `manifest.json` except the two Obsidian plugins. `superpo
 10. Run `install`, `test`, `build`, then `pack`. A failure here stops the run with no commit and no tag, so a rerun repeats the whole path from step 4.
 11. Commit the merge and the version bump as one commit, message `Sync <upstream-tag> and release <fork-version>`.
 12. Create the tag from `tagFormat` on that commit. Push the commit and the tag.
-13. Publish the release with the tag as name. Attach `assets`. When `pack` ran, attach the packed archive as well. Copy the upstream release body below a short header that records the merge commit.
+13. Publish the release with the tag as name. Attach `assets`. When `pack` ran, attach the packed archive as well. Copy the upstream release body below a short header that records the merge commit, drop any `**Full Changelog**` line from that body, and end with the fork's own `**Full Changelog**` line: the commits URL of the new tag when no earlier release exists, else a compare URL from the previous release tag to the new tag.
 14. On a conflict, or on an allowlist rejection at step 5, write `$RUNNER_TEMP/conflicts.txt` and open or comment on the issue `Upstream sync problem: <upstream-tag>`. A build failure opens no issue, because the run itself shows the failure.
 
 ### Rules the scripts enforce

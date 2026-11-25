@@ -4,19 +4,8 @@ on:
   schedule: [{ cron: "17 7 * * *" }]
   workflow_dispatch:
     inputs:
-      tag:
-        {
-          description: "Upstream release tag to merge (blank = newest release)",
-          required: false,
-          type: "string",
-        }
-      force:
-        {
-          description: "Publish over an existing release for the same base",
-          required: false,
-          type: "boolean",
-          default: false,
-        }
+      tag: { description: "Upstream release tag to merge (blank = newest release)", required: false, type: "string" }
+      force: { description: "Publish over an existing release for the same base", required: false, type: "boolean", default: false }
 
 permissions: { contents: "write", issues: "write" }
 concurrency: { group: "upstream-sync", cancel-in-progress: false }

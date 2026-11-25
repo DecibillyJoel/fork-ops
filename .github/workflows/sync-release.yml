@@ -303,15 +303,29 @@ jobs:
           UPSTREAM: ${{ steps.config.outputs.upstream }}
           TAG: ${{ steps.resolve_upstream_tag.outputs.tag }}
           TAG_TAG: ${{ steps.plan.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           config=".github/fork-release.json"
+          notes="$RUNNER_TEMP/notes.md"
+          previous=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')
+          if [ -z "$previous" ]; then
+            changelog="https://github.com/${REPO}/commits/${TAG_TAG}"
+          else
+            changelog="https://github.com/${REPO}/compare/${previous}...${TAG_TAG}"
+          fi
+          body=$(gh api "repos/${UPSTREAM}/releases/tags/${TAG}" --jq .body \
+            | grep -v '^\*\*Full Changelog\*\*:' || true)
           {
             echo "Synced upstream ${TAG}."
             echo "Dataset commit: $(git rev-parse HEAD)."
+            if [ -n "$body" ]; then
+              echo ""
+              printf '%s\n' "$body"
+            fi
             echo ""
-          } > "$RUNNER_TEMP/notes.md"
-          gh api "repos/${UPSTREAM}/releases/tags/${TAG}" --jq .body >> "$RUNNER_TEMP/notes.md"
+            echo "**Full Changelog**: ${changelog}"
+          } > "$notes"
           assets=()
           while IFS= read -r asset; do
             assets+=("$asset")
@@ -320,7 +334,7 @@ jobs:
           if [ -n "$pack" ]; then
             assets+=("*.tgz")
           fi
-          gh release create "$TAG_TAG" --title "$TAG_TAG" --notes-file "$RUNNER_TEMP/notes.md" "${assets[@]}"
+          gh release create "$TAG_TAG" --title "$TAG_TAG" --notes-file "$notes" "${assets[@]}"
 
       - name: "Report the conflict"
         id: report_problem
