@@ -56,3 +56,15 @@ test("an unparsed upstream tag throws before any work", () => {
 test("a fourth numeric segment in the upstream tag throws", () => {
   assert.throws(() => planRelease({ ...input, upstreamTag: "1.2.3.4" }), /fourth|segment/i);
 });
+
+test("force publishes the next fork number over an existing release for the base", () => {
+  const plan = planRelease({
+    ...input,
+    merged: true,
+    releases: ["v0.26.4-fork.1"],
+    tags: ["v0.26.4-fork.1"],
+    currentVersion: "0.26.4-fork.1",
+    force: true,
+  });
+  assert.deepEqual(plan, { action: "publish", version: "0.26.4-fork.2", tag: "v0.26.4-fork.2" });
+});

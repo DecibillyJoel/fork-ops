@@ -44,6 +44,7 @@ export function planRelease({
   tags = [],
   currentVersion = "",
   tagFormat = "v{version}",
+  force = false,
 } = {}) {
   const upstream = parseUpstream(upstreamTag);
   const base = bumpPatch(upstream);
@@ -53,8 +54,11 @@ export function planRelease({
   }
 
   const seen = forkVersions(releases, base);
-  if (seen.length > 0) {
+  if (seen.length > 0 && !force) {
     return plan(tagFormat, "skip", highest(seen));
+  }
+  if (force) {
+    return plan(tagFormat, "publish", nextForkVersion({ base, tags, current: currentVersion }));
   }
 
   const held = forkVersions([currentVersion], base);
