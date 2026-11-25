@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DecibillyJoel/fork-ops/schema/fork-release.schema.json",
+  "title": "Fork release config",
+  "description": "The .github/fork-release.json file that the reusable sync and release workflow reads in each fork.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["upstream", "tagFormat", "lockfile"],
+  "properties": {
+    "upstream": {
+      "type": "string",
+      "pattern": "^[\\w.-]+/[\\w.-]+$"
+    },
+    "tagFormat": {
+      "type": "string",
+      "pattern": "^[^{}]*\\{version\\}[^{}]*$"
+    },
+    "versionFields": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "field"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "field": { "type": "string", "minLength": 1 }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "addEntry"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "addEntry": { "const": true }
+            }
+          }
+        ]
+      }
+    },
+    "lockfile": {
+      "type": "string",
+      "enum": ["package-lock.json", "pnpm-lock.yaml", "none"]
+    },
+    "install": { "type": "string" },
+    "test": { "type": "string" },
+    "build": { "type": "string" },
+    "pack": { "type": "string" },
+    "assets": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "nodeVersion": { "type": "string" }
+  }
+}
