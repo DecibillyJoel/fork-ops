@@ -204,6 +204,7 @@ No fork in scope has a `manifest.json` except the two Obsidian plugins. `superpo
 ### Inputs of `sync-release.yml`
 
 - `tag`: optional. A manual value wins over the newest upstream release tag.
+- `force`: optional boolean, default `false`. It publishes the next fork number for the base even when a release for that base already exists. A first run on an already-merged upstream tag needs it.
 - No other input. Everything else comes from `.github/fork-release.json`.
 
 ### Steps of `sync-release.yml`
@@ -234,7 +235,9 @@ No fork in scope has a `manifest.json` except the two Obsidian plugins. `superpo
 
 ### Caller file in each fork
 
-The file holds the cron `17 7 * * *`, a manual trigger with an optional `tag` input, `permissions` with `contents: write` and `issues: write`, and one line: `uses: DecibillyJoel/fork-ops/.github/workflows/sync-release.yml@v1`. It holds fewer than twenty lines. It declares no secret, because the job never acts on another repository.
+The file holds the cron `17 7 * * *`, a manual trigger with an optional `tag` input and an optional `force` boolean, `permissions` with `contents: write` and `issues: write`, the concurrency group `upstream-sync` with `cancel-in-progress: false`, and one line: `uses: DecibillyJoel/fork-ops/.github/workflows/sync-release.yml@v1`. It holds fewer than twenty lines. It declares no secret, because the job never acts on another repository.
+
+The concurrency group lives only in the caller. GitHub cancels a run when a top-level workflow and a job inside it declare the same group, with the message `Canceling since a deadlock was detected for concurrency group`. So `sync-release.yml` declares no group, and serialization stays per fork.
 
 ### Vault repair
 
