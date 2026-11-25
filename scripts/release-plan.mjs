@@ -52,7 +52,7 @@ export function planRelease({
     return plan(tagFormat, "sync", nextForkVersion({ base, tags }));
   }
 
-  const seen = [...forkVersions(releases, base), ...forkVersions(releases, upstream)];
+  const seen = forkVersions(releases, base);
   if (seen.length > 0) {
     return plan(tagFormat, "skip", highest(seen));
   }
