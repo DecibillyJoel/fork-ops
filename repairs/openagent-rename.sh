@@ -32,24 +32,26 @@ done
 [[ "$NEW_TAG" =~ $FORK_TAG_PATTERN ]] || die "new tag $NEW_TAG is not <base>-fork.<N> with three numeric segments"
 [ "$OLD_TAG" != "$NEW_TAG" ] || die "old tag and new tag are the same"
 
-AUTH=(-H "Authorization: Bearer $GITHUB_PERSONAL_ACCESS_TOKEN" -H "Accept: application/vnd.github+json")
+AUTH=(-H "Authorization: Bearer $GITHUB_PERSONAL_ACCESS_TOKEN")
+JSON_AUTH=("${AUTH[@]}" -H "Accept: application/vnd.github+json")
+RAW_AUTH=("${AUTH[@]}" -H "Accept: application/octet-stream")
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # GET <path> <outfile> -> http status on stdout
 get_to() {
-  curl -sS -o "$2" -w '%{http_code}' "${AUTH[@]}" "$API$1"
+  curl -sS -o "$2" -w '%{http_code}' "${JSON_AUTH[@]}" "$API$1"
 }
 
 # SEND <method> <path> <bodyfile|""> <outfile> -> http status on stdout
 send() {
   local method="$1" path="$2" body="$3" out="$4"
   if [ -n "$body" ]; then
-    curl -sS -X "$method" -o "$out" -w '%{http_code}' "${AUTH[@]}" \
+    curl -sS -X "$method" -o "$out" -w '%{http_code}' "${JSON_AUTH[@]}" \
       -H "Content-Type: application/json" --data-binary "@$body" "$API$path"
   else
-    curl -sS -X "$method" -o "$out" -w '%{http_code}' "${AUTH[@]}" "$API$path"
+    curl -sS -X "$method" -o "$out" -w '%{http_code}' "${JSON_AUTH[@]}" "$API$path"
   fi
 }
 
@@ -81,23 +83,23 @@ node -e '
       console.error(`release ${data.tag_name} has no ${name} asset`);
       process.exit(3);
     }
-    lines.push(`${name} ${asset.id}`);
+    lines.push(`${name} ${asset.id} ${asset.size}`);
   }
   fs.writeFileSync(process.argv[1] + ".assets", lines.join("\n") + "\n");
 ' "$WORK/old.json" "${ASSETS[@]}" || die "release $OLD_TAG is missing a required asset"
 mv "$WORK/old.json.assets" "$WORK/assets.txt"
-while read -r name asset_id; do
-  say "download $name (asset $asset_id)"
-  curl -sSL -f "${AUTH[@]}" -H "Accept: application/octet-stream" \
-    -o "$WORK/$name" "$API/releases/assets/$asset_id" \
+while read -r name asset_id asset_size; do
+  say "download $name (asset $asset_id, $asset_size bytes)"
+  curl -sSL -f "${RAW_AUTH[@]}" -o "$WORK/$name" "$API/releases/assets/$asset_id" \
     || die "cannot download $name"
-  [ -s "$WORK/$name" ] || die "$name is empty"
+  got_size="$(wc -c < "$WORK/$name")"
+  [ "$got_size" = "$asset_size" ] || die "$name is $got_size bytes, the API says $asset_size"
 done < "$WORK/assets.txt"
 
 say "check that $NEW_TAG is free"
-status="$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$API/git/ref/tags/$NEW_TAG")"
+status="$(curl -sS -o /dev/null -w '%{http_code}' "${JSON_AUTH[@]}" "$API/git/ref/tags/$NEW_TAG")"
 [ "$status" = "404" ] || die "tag $NEW_TAG already exists (HTTP $status)"
-status="$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$API/releases/tags/$NEW_TAG")"
+status="$(curl -sS -o /dev/null -w '%{http_code}' "${JSON_AUTH[@]}" "$API/releases/tags/$NEW_TAG")"
 [ "$status" = "404" ] || die "release $NEW_TAG already exists (HTTP $status)"
 
 say "resolve the commit of $OLD_TAG"
@@ -164,7 +166,7 @@ for name in "${ASSETS[@]}"; do
     *) type="application/octet-stream" ;;
   esac
   say "upload $name"
-  status="$(curl -sS -X POST -o "$WORK/upload.json" -w '%{http_code}' "${AUTH[@]}" \
+  status="$(curl -sS -X POST -o "$WORK/upload.json" -w '%{http_code}' "${JSON_AUTH[@]}" \
     -H "Content-Type: $type" --data-binary "@$WORK/$name" \
     "$UPLOADS/releases/$NEW_ID/assets?name=$name")"
   [ "$status" = "201" ] || die "cannot upload $name (HTTP $status): $(cat "$WORK/upload.json")"
@@ -189,7 +191,7 @@ status="$(send DELETE "/releases/$OLD_ID" "" "$WORK/delete-release.json")"
 [ "$status" = "204" ] || die "cannot delete release $OLD_ID (HTTP $status)"
 
 say "delete the old tag $OLD_TAG"
-status="$(curl -sS -X DELETE -o "$WORK/delete-tag.json" -w '%{http_code}' "${AUTH[@]}" "$API/git/refs/tags/$OLD_TAG")"
+status="$(curl -sS -X DELETE -o "$WORK/delete-tag.json" -w '%{http_code}' "${JSON_AUTH[@]}" "$API/git/refs/tags/$OLD_TAG")"
 [ "$status" = "204" ] || die "cannot delete tag $OLD_TAG (HTTP $status)"
 
 echo "$NEW_TAG"
